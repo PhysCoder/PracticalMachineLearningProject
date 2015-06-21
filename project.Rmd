@@ -1,0 +1,106 @@
+---
+title: "Practical Machine Learning: ML Analaysis of Human Recognistion Activity Data"
+output: html_document
+---
+```{r,echo=FALSE,results='hide',message=FALSE,warning=FALSE}
+library(ggplot2)
+library(caret)
+library(rattle)
+library(rpart)
+library(randomForest)
+```
+
+## BACKGROUND
+In this report we will utilize the HAR data from UCI to investigate how the various monitoring measurements can help determine whether a person is doing a weightlifting exercise in the correct way and if not, how correct he is. We will need the `caret, rpart, randomForest`, and `ggplot2` libraries in R and the data can be obtained through the following code:
+
+```{r}
+set.seed(12345)
+url_training<- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url_testing <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+# download.file(url=url_training, method='curl')
+# download.file(url=url_test)
+trainingRaw<- read.csv('pml-training.csv', header=T)
+testingRaw <- read.csv('pml-testing.csv', header=T)
+```
+
+## PREPROCESS
+Since the data contains missing values and there are 160 features for each measurement, we need to clean up the data for more efficient computation and efffectiving modelling.
+
+### Create test and training from training data
+```{r}
+inTrain <- createDataPartition(y=trainingRaw$classe, p=0.6, list=FALSE)
+training<- trainingRaw[inTrain, ]
+testing <- trainingRaw[-inTrain, ]
+dim(training)
+dim(testing)
+```
+### Remove attributes with `NA`'s
+```{r}
+clmSize <- dim(training)[1]
+rmAttr <- c()
+for (clm in 1:length(training)){
+    if (sum(is.na(training[,clm]))> 0){
+        rmAttr <- c(rmAttr,clm)
+    }
+}
+trainingPP <- training[,-rmAttr]
+dim(trainingPP)
+```
+### Remove near-zero attributes
+```{r}
+nzv <- nearZeroVar(trainingPP,saveMetrics = TRUE) 
+trainingPP <- trainingPP[,-which(nzv$nzv==TRUE)]
+head(nzv)
+```
+### Remove unrelated features: ID(`X`) and `user_name`
+```{r}
+trainingPP <- trainingPP[-c(1,2)]
+testingPP  <- subset(testing, select=names(trainingPP))
+```
+We can also try to remove the highly correlated attributes with the `cor` and `findCorrelation` functions. However, a quick investigation reveals there are only 3 features that are significantly correlated, it seems not so crucial to removing them.
+Finally, after the preprocessing, we are left with a much smaller dataset with dimension (`r dim(trainingPP)`), the exact same procedure is also applied to the testing dataset. The features left are:
+```{r}
+colnames(trainingPP)
+```
+
+## TRAINING
+### Classification tree
+We tried using **neural net** and **radial basis netwrok** to train the data, but both were extremely slow. So we decided to use the **classification tree** algorithm. As we can see from below, the classification tree works reasonaly well considerting its fast training time, the acurracy is still not high enough.
+```{r}
+modFit1 <- rpart(classe ~ ., data=trainingPP)
+modFit1$cptable
+fancyRpartPlot(modFit1)
+```
+
+### Random Forest
+To improve the classification accuracy, we then used the **random forest** algorithm. Since **random forest** utilizes bootstraping both samples and variables, we hope it can achieve higher accuracy.
+```{r}
+#modFit2 <- randomForest(classe~., data=trainingPP,prox=T, type='class')
+modFit2<-train(classe~.,data=trainingPP,trControl=trainControl(method = "cv", number = 4), method='rf')
+modFit2$confusion
+fancyRpartPlot(modFit2)
+```
+Due to the long running time, this section is commented out, but on the previous runs it did give a much higher classification accuracy, around 99%.
+
+## EVALUATION
+### Confusion Matrix and Out-of-sample Error
+We can check the confusion matrix of the classification algorithm from the test data
+
+for **Classification Tree**
+```{r}
+pred1 <- predict(modFit1, newdata=testingPP[-length(testingPP)], type='class')
+confusionMatrix(pred1, testingPP$classe)
+```
+for **Random Forest**
+```{r}
+pred2 <- predict(modFit2, newdata=testingPP[-length(testingPP)], type='class')
+confusionMatrix(pred2, testingPP$classe)
+```
+It is apparent that **random forest** outperforms **classification tree**, but the at the cost of slower training process.
+The out-of-sample error is one minus the accuracy which is around 13% and 0.2% for **classficiation tree** and **random forest** respectively. The error can come from correlated features and overfitting on the training set. 
+
+## ADDITIONAL TESTING
+Using the 20 unlabeled cases from the course website, we can predict their behaviors by:
+```{r}
+newTest <- subset(testingRaw, select=names(trainingPP[-length(trainingPP)]))
+newPred <- predict(modFit1, newdata = newTest, type='class')
